@@ -30,6 +30,9 @@ def random_genai():
         print(f"Error selecting API key: {e}")
         raise
 
+print(random_genai())
+quit()
+
 
 def create_generation_config():
     """创建生成配置"""

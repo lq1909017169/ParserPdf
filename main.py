@@ -54,7 +54,7 @@ def process_single_pdf(pdf_path):
 
 if __name__ == '__main__':
     # 默认读取 input 文件夹下的 example.pdf，或者通过命令行传参
-    target_pdf = '/usr/local/src/s3mnt/new_backend/upload/3b5c822b955a48deb83695ada1399252/33e95cf7_113965_c1d8f5e6.pdf'
+    target_pdf = '/usr/local/src/s3mnt/new_backend/upload/3b5c822b955a48deb83695ada1399252/24474f7d_404460_e62897a8.pdf'
 
     if len(sys.argv) > 1:
         target_pdf = sys.argv[1]
