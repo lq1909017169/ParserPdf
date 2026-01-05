@@ -11,7 +11,11 @@ load_dotenv()
 # 准备 API Keys
 api_keys_str = os.getenv("API_KEYS", "")
 genai_name = os.getenv("GENAI_NAME", "")
-API_KEYS = [k.strip() for k in api_keys_str.split(',') if k.strip()]
+API_KEYS = [
+    k.strip().replace("'", "").replace('"', "")  # 核心修改：强制替换掉单引号和双引号
+    for k in api_keys_str.split(',')
+    if k.strip()
+]
 
 
 def random_genai():
