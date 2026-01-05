@@ -1,39 +1,26 @@
 import os
-import random
 import time
 import traceback
-
 import google.generativeai as genai
 import random
-import re
+from dotenv import load_dotenv
 
-# genai_name = 'models/gemini-3-flash-preview'
-genai_name = 'gemini-2.5-flash'
+# 加载环境变量
+load_dotenv()
 
-api_key_list = [
-    'AIzaSyD_7BfeETBhEBwX5OCb3KeGHV31YnehBQQ',
-    'AIzaSyD6cIewpVcTGChCEE6mtQhN3SAz8W6OeaM',
-    'AIzaSyCoth-Um_J3ZANKmvSH3L2x5KAUywZmSrM',
-    'AIzaSyBNj2FADhaO5Qycb9-IbSep4k4qFFf9POc',
-    'AIzaSyCmfuAaiAAnRi9yNQHZu-V6cP0Hy_J5IFk',
-    'AIzaSyAWgbx4iAMH5gQ2p4a6G8W1b8E9pUnz6t8',
-    'AIzaSyCcanMVdiGZfHJZ9L_Otq6ZF57bdmBtoGs',
-    'AIzaSyCd2N3qT3AanF6UNO47Wn9q6JUZ0m41kfI',
-    'AIzaSyDOw8bodZolftzufUnC5rdufZUgs-NVqbE',
-    'AIzaSyC8CDZbzjLFWrPWkpGw-P7saJc0iC8Lhpk',
-    'AIzaSyBnhHogR73x2qQAYHOIthQiv1PLa63-BYY',
-    'AIzaSyAsPXzruT5xV5AvBVQoLZdzGOg9HlKus_4',
-    'AIzaSyCE5vPUh5KnRT1SUGdTggsuIPkHC4Js26Q'
-]
+# 准备 API Keys
+api_keys_str = os.getenv("API_KEYS", "")
+genai_name = os.getenv("GENAI_NAME", "")
+API_KEYS = [k.strip() for k in api_keys_str.split(',') if k.strip()]
 
 
 def random_genai():
     """随机获取一个 API Key"""
     try:
-        if not api_key_list:
+        if not API_KEYS:
             raise ValueError("API key list is empty")
-        api_key_index = random.randint(0, len(api_key_list) - 1)
-        api_key = api_key_list[api_key_index]
+        api_key_index = random.randint(0, len(API_KEYS) - 1)
+        api_key = API_KEYS[api_key_index]
         return api_key
     except Exception as e:
         print(f"Error selecting API key: {e}")
