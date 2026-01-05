@@ -16,6 +16,7 @@ def convert_pdf_to_images(pdf_path):
 
     img_path_list = []
 
+    print('output_path创建img路径', output_path)
     ensure_directory_exists(output_path)
 
     print(f"📄 正在处理 PDF: {pdf_name} ...")
