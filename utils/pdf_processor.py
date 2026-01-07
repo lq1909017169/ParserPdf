@@ -2,6 +2,13 @@ import os
 import fitz  # PyMuPDF
 from PIL import Image
 from .file_utils import ensure_directory_exists
+import datetime
+import pandas as pd
+from dotenv import load_dotenv
+from pymysql import Connect
+
+# 加载环境变量
+load_dotenv()
 
 
 def convert_pdf_to_images(pdf_path):
@@ -45,3 +52,37 @@ def convert_pdf_to_images(pdf_path):
         print(f"  - 已生成图片: P{i + 1}")
 
     return img_path_list, output_path
+
+
+def pdf_balance(image_path, task_id, file_id, user_id, pdf_page_num):
+    # 数据库配置
+    setting_sql = {'host': os.getenv("host", ""), 'port': int(os.getenv("port", "")), 'user': os.getenv("user", ""),
+                   'password': os.getenv("password", ""), 'database': os.getenv("database", "")}
+
+    image_path_one = os.path.join(image_path, '1.jpg')
+    success_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    result_path = f"/usr/local/src/s3mnt/new_backend/result/{task_id}/{file_id}/pdf_middle.json"
+    with Connect(**setting_sql) as conn:
+        cursor = conn.cursor()
+        sql = f'UPDATE file_result SET success_time="{success_time}", ' \
+              f'parser_time="{success_time}", result_path="{result_path}", ' \
+              f'image_path="{image_path_one}" WHERE file_id="{file_id}" and task_id="{task_id}"'
+        cursor.execute(sql)
+        conn.commit()
+
+        # 扣费详情
+        se_sql = f'SELECT balance FROM user_balance where user_id="{user_id}"'
+        balance = pd.read_sql(sql=se_sql, con=conn).iloc[-1]['balance']
+
+        price = os.getenv("price", "")
+
+        residue_balance = int(balance) - (pdf_page_num * price)
+
+        insert_sql = f'INSERT INTO user_balance(user_id, balance, change_amount, c_time, ' \
+                     f'change_project, file_id) VALUES ' \
+                     f'("{user_id}", {residue_balance}, {-pdf_page_num * price}, ' \
+                     f'"{datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}", ' \
+                     f'"pdfParser", "{file_id}");'
+        print(insert_sql)
+        cursor.execute(insert_sql)
+        conn.commit()

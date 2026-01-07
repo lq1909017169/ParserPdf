@@ -64,7 +64,7 @@ def wait_for_files_active(files):
     print("...all files ready")
 
 
-def img_to_md(image_path):
+def img_to_md(image_path, lang):
     api_key = random_genai()
     print('Using api_key ending in:', api_key[-4:])  # 打印Key的后四位用于调试，不打印全貌
 
@@ -85,7 +85,7 @@ def img_to_md(image_path):
         # 2. 设置 System Instruction
         # 这里的指令非常关键，要求它强制输出 Markdown，并处理公式
         system_instruction = (
-            "你是一个专业的 OCR 助手。请识别图片中的所有内容，并将其转换为标准的 Markdown 格式返回。"
+            f"你是一个专业的 OCR 助手。请识别图片中的所有内容，图中语言为:{lang},请以{lang}语言返回并将其转换为标准的 Markdown 格式返回。"
             "如果是表格，请使用 Markdown 表格语法。"
             "如果是数学公式，请使用 LaTeX 格式（行内公式用 $ 包裹，独占一行用 $$ 包裹）。"
             "不要包含任何开场白或结束语，只返回转换后的内容。"
@@ -121,8 +121,9 @@ def img_to_md(image_path):
 if __name__ == '__main__':
     # 确保文件存在再运行
     img_path = 'img/gongshi.png'
+    lang = 'zh'
     if os.path.exists(img_path):
-        result = img_to_md(img_path)
+        result = img_to_md(img_path, lang)
         print("-" * 20 + " RESULT " + "-" * 20)
         print(result)
     else:

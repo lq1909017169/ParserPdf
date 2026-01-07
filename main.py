@@ -1,11 +1,19 @@
 import os
 import sys
-from utils.pdf_processor import convert_pdf_to_images
+import traceback
+
+from utils.pdf_processor import convert_pdf_to_images, pdf_balance
 from utils.ocr_engine import img_to_md
 from utils.file_utils import save_to_json
+import boto3
+
+from dotenv import load_dotenv
+
+# 加载环境变量
+load_dotenv()
 
 
-def process_single_pdf(pdf_path):
+def process_single_pdf(pdf_path, lang):
     if not os.path.exists(pdf_path):
         print(f"错误: 文件不存在 -> {pdf_path}")
         return
@@ -23,7 +31,7 @@ def process_single_pdf(pdf_path):
     }
     print(result_data)
 
-    print(f"\n🚀 开始 OCR 识别 ({len(img_paths)} 页)...")
+    print(f"\n🚀 开始 OCR 识别 ({len(img_paths)} 页，语言{lang})...")
 
     # 2. 遍历图片进行 OCR
     for idx, img_path in enumerate(img_paths):
@@ -31,7 +39,7 @@ def process_single_pdf(pdf_path):
         print(f"[{page_num}/{len(img_paths)}] 处理中...")
 
         # 调用 Gemini
-        md_content = img_to_md(img_path)
+        md_content = img_to_md(img_path, lang)
 
         # 拼装单页数据
         page_data = {
@@ -50,12 +58,50 @@ def process_single_pdf(pdf_path):
     save_to_json(result_data, json_output_path)
 
     print("\n✨ 全部完成！")
+    return output_dir, len(img_paths)
 
 
 if __name__ == '__main__':
-    # 默认读取 input 文件夹下的 example.pdf，或者通过命令行传参
-    target_pdf = '/usr/local/src/s3mnt/new_backend/upload/3b5c822b955a48deb83695ada1399252/24474f7d_404460_e62897a8.pdf'
+    region_name = os.getenv("REGION", "")
+    aws_access_key_id = os.getenv("REGION", "aws_access_key_id")
+    aws_secret_access_key = os.getenv("REGION", "aws_secret_access_key")
+    QUEUE_URL = os.getenv("REGION", "QUEUE_URL")
 
-    if len(sys.argv) > 1:
-        target_pdf = sys.argv[1]
-    process_single_pdf(target_pdf)
+    sqs = boto3.client('sqs', region_name=region_name,
+                       aws_access_key_id=aws_access_key_id,
+                       aws_secret_access_key=aws_secret_access_key)
+    # s3 = boto3.client('s3', region_name=Parameter.Parameter.REGION)
+
+    # 加载模型
+    print('load model')
+
+    while True:
+        print('While loop ---->')
+        response = sqs.receive_message(QueueUrl=QUEUE_URL, MaxNumberOfMessages=1,
+                                       WaitTimeSeconds=20)
+        if 'Messages' in response:
+            # snapshot1 = tracemalloc.take_snapshot()
+            message = response['Messages'][0]
+            sqs.delete_message(QueueUrl=QUEUE_URL, ReceiptHandle=message['ReceiptHandle'])
+            print(message)
+            file_map = eval(message['Body'])
+            try:
+                file_id = file_map['file_id']
+                task_id = file_map['task_id']
+                layout = file_map['layout']
+                pdf_path = os.path.join('/usr/local/src/s3mnt/new_backend/upload', task_id, f"{file_id}.pdf")
+                user_id = file_map['user_id']
+                parameter = file_map['parameter']
+                lang = file_map['lang']
+
+                # 解析pdf
+                image_path, pdf_page_num = process_single_pdf(pdf_path=pdf_path, lang=lang)
+
+                # 计费
+                pdf_balance(image_path, task_id, file_id, user_id, pdf_page_num)
+
+                print('扣费成功')
+
+            except:
+                print(traceback.format_exc())
+
