@@ -63,9 +63,9 @@ def process_single_pdf(pdf_path, lang):
 
 if __name__ == '__main__':
     region_name = os.getenv("REGION", "")
-    aws_access_key_id = os.getenv("REGION", "aws_access_key_id")
-    aws_secret_access_key = os.getenv("REGION", "aws_secret_access_key")
-    QUEUE_URL = os.getenv("REGION", "QUEUE_URL")
+    aws_access_key_id = os.getenv("aws_access_key_id", "")
+    aws_secret_access_key = os.getenv("aws_secret_access_key", "")
+    QUEUE_URL = os.getenv("QUEUE_URL", "")
 
     sqs = boto3.client('sqs', region_name=region_name,
                        aws_access_key_id=aws_access_key_id,
