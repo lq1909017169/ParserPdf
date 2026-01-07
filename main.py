@@ -90,7 +90,7 @@ if __name__ == '__main__':
             try:
                 file_id = file_map['file_id']
                 task_id = file_map['task_id']
-                layout = file_map['layout']
+                # layout = file_map['layout']
                 pdf_path = os.path.join('/usr/local/src/s3mnt/new_backend/upload', task_id, f"{file_id}.pdf")
                 user_id = file_map['user_id']
                 parameter = file_map['parameter']
