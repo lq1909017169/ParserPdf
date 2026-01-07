@@ -74,7 +74,7 @@ def pdf_balance(image_path, task_id, file_id, user_id, pdf_page_num):
         se_sql = f'SELECT balance FROM user_balance where user_id="{user_id}"'
         balance = pd.read_sql(sql=se_sql, con=conn).iloc[-1]['balance']
 
-        price = os.getenv("price", "")
+        price = int(os.getenv("price", ""))
 
         residue_balance = int(balance) - (pdf_page_num * price)
 
