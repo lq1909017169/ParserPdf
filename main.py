@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 import traceback
 
 from utils.pdf_processor import convert_pdf_to_images, pdf_balance
@@ -77,6 +78,7 @@ if __name__ == '__main__':
 
     while True:
         print('While loop ---->')
+        time.sleep(5)
         response = sqs.receive_message(QueueUrl=QUEUE_URL, MaxNumberOfMessages=1,
                                        WaitTimeSeconds=20)
         if 'Messages' in response:
