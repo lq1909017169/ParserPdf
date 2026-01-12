@@ -91,12 +91,20 @@ def img_to_md(image_path, lang):
             "不要包含任何开场白或结束语，只返回转换后的内容。"
         )
 
+        safety_settings = {
+            "HARM_CATEGORY_HARASSMENT": "BLOCK_NONE",
+            "HARM_CATEGORY_HATE_SPEECH": "BLOCK_NONE",
+            "HARM_CATEGORY_SEXUALLY_EXPLICIT": "BLOCK_NONE",
+            "HARM_CATEGORY_DANGEROUS_CONTENT": "BLOCK_NONE",
+        }
+
         # 3. 创建模型
         generation_config = create_generation_config()
         model = genai.GenerativeModel(
             model_name=genai_name,
             generation_config=generation_config,
             system_instruction=system_instruction,
+            safety_settings=safety_settings
         )
 
         # 4. 生成内容 (使用 generate_content 替代 chat，因为这是一次性任务)
