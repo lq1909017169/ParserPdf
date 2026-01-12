@@ -119,7 +119,14 @@ def img_to_md(image_path, lang):
         # except:
         #     pass
 
-        return response.text
+        try:
+            return response.text
+        except ValueError:
+            print(f"DEBUG: Finish Reason: {response.candidates[0].finish_reason}")
+            # 强行获取截断内容
+            if response.candidates and response.candidates[0].content.parts:
+                return response.candidates[0].content.parts[0].text
+            return ""
 
     except Exception:
         print(traceback.format_exc())
