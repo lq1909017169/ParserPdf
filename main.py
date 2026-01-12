@@ -1,3 +1,4 @@
+import datetime
 import os
 import sys
 import time
@@ -7,6 +8,7 @@ from utils.pdf_processor import convert_pdf_to_images, pdf_balance
 from utils.ocr_engine import img_to_md
 from utils.file_utils import save_to_json
 import boto3
+from pymysql import Connect
 
 from dotenv import load_dotenv
 
@@ -96,11 +98,25 @@ if __name__ == '__main__':
                 parameter = file_map['parameter']
                 lang = file_map['lang']
 
+                # 数据库配置
+                setting_sql = {'host': os.getenv("host", ""), 'port': int(os.getenv("port", "")),
+                               'user': os.getenv("user", ""),
+                               'password': os.getenv("password", ""), 'database': os.getenv("database", "")}
+
+                with Connect(**setting_sql) as conn:
+                    cursor = conn.cursor()
+                    sql = f'UPDATE file_result SET ' \
+                          f'queue_time="{datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}" ' \
+                          f'WHERE file_id="{file_id}" and task_id="{task_id}"'
+                    print(sql)
+                    cursor.execute(sql)
+                    conn.commit()
+
                 # 解析pdf
                 image_path, pdf_page_num = process_single_pdf(pdf_path=pdf_path, lang=lang)
 
                 # 计费
-                pdf_balance(image_path, task_id, file_id, user_id, pdf_page_num)
+                pdf_balance(image_path, task_id, file_id, user_id, pdf_page_num, setting_sql)
 
                 print('扣费成功')
 

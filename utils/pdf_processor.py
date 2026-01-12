@@ -54,10 +54,7 @@ def convert_pdf_to_images(pdf_path):
     return img_path_list, output_path
 
 
-def pdf_balance(image_path, task_id, file_id, user_id, pdf_page_num):
-    # 数据库配置
-    setting_sql = {'host': os.getenv("host", ""), 'port': int(os.getenv("port", "")), 'user': os.getenv("user", ""),
-                   'password': os.getenv("password", ""), 'database': os.getenv("database", "")}
+def pdf_balance(image_path, task_id, file_id, user_id, pdf_page_num, setting_sql):
 
     image_path_one = os.path.join(image_path, '1.jpg')
     success_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
