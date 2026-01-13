@@ -87,10 +87,9 @@ def img_to_md(image_path, lang):
         # 2. 设置 System Instruction
         # 这里的指令非常关键，要求它强制输出 Markdown，并处理公式
         system_instruction = (
-            f"你是一个专业的 OCR 助手。请识别图片中的所有内容，图中语言为:{lang},请以{lang}语言返回并将其转换为标准的 Markdown 格式返回。"
-            "如果是表格，请使用 Markdown 表格语法。"
-            "如果是数学公式，请使用 LaTeX 格式（行内公式用 $ 包裹，独占一行用 $$ 包裹）。"
-            "不要包含任何开场白或结束语，只返回转换后的内容。"
+            f"你是一个专业的 OCR 助手。请识别图片中的所有内容，图中语言为:{lang},请以{lang}语言返回并将其转换为标准的 "
+            f"Markdown 格式返回。如果是表格，请使用 Markdown 表格语法。如果是数学公式，请使用 LaTeX 格式（行内公式用 $ 包裹，独占一行用 $$ 包裹）。"
+            f"不要包含任何开场白或结束语，只返回转换后的内容。"
         )
 
         safety_settings = {
@@ -124,6 +123,7 @@ def img_to_md(image_path, lang):
         try:
             return response.text
         except:
+            print(response.candidates)
             print(traceback.format_exc())
             print(f"DEBUG: Finish Reason: {response.candidates[0].finish_reason}")
             # 强行获取截断内容
