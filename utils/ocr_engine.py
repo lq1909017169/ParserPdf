@@ -39,7 +39,8 @@ def create_generation_config():
         "temperature": 0.1,  # 调低温度以获得更精准的OCR结果，减少幻觉
         "top_p": 0.95,
         "top_k": 40,
-        "max_output_tokens": 8192,
+        # "max_output_tokens": 8192,
+        "max_output_tokens": 100000,
         "response_mime_type": "text/plain",
     }
 
