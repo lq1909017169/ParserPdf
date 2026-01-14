@@ -53,35 +53,25 @@ def get_safety_settings():
 
 
 def img_to_md(image_path, lang="en"):
-    print(f"\n========== STARTING OCR FOR: {os.path.basename(image_path)} ==========")
     api_key = random_genai()
 
-    # 打印关键配置信息
-    print(f"[DEBUG] Using Model Name: '{genai_name}'")
-    print(f"[DEBUG] API Key (last 4 chars): ...{api_key[-4:]}")
-
     if not os.path.exists(image_path):
-        print(f"[DEBUG] ERROR: Image path does not exist: {image_path}")
         return "Error: Image file not found."
 
     try:
         genai.configure(api_key=api_key)
+        img = PIL.Image.open(image_path)
 
-        # 1. 加载并检查图片
-        try:
-            img = PIL.Image.open(image_path)
-            print(f"[DEBUG] Image Loaded Successfully. Size: {img.size}, Format: {img.format}, Mode: {img.mode}")
-        except Exception as e:
-            print(f"[DEBUG] PIL Error loading image: {e}")
-            return "Error: Invalid image file."
-
-        # 2. 准备 Prompt
+        # ==========================================
+        # 核心修复：针对目录页的 Prompt 工程
+        # ==========================================
         system_instruction = (
             f"你是一个 OCR 专家。识别图中的{lang}内容并转为 Markdown。"
-            f"规则 1：如果遇到目录中的引导点（如 'Introduction ...... 5'），**绝对不要**输出中间的点号，直接输出 'Introduction 5' 或使用空格分隔。"
-            f"规则 2：不要输出任何 Markdown 代码块标记（如 ```markdown），直接输出内容。"
-            f"规则 3：如果遇到数学公式，使用 LaTeX 格式。"
-            f"规则 4：若遇到乱码或无法识别，直接跳过。"
+            f"这是一个目录页（Table of Contents）。"
+            f"【严重警告】：图中有大量的引导点（如 'Introduction ...... 5'）。"
+            f"在输出时，**绝对禁止**输出连续的点号（......）。"
+            f"请直接忽略中间的点，只输出标题和页码，例如输出 '1 Introduction 5'。"
+            f"保持层级结构。遇到乱码跳过。"
         )
 
         model = genai.GenerativeModel(
@@ -91,59 +81,36 @@ def img_to_md(image_path, lang="en"):
             safety_settings=get_safety_settings()
         )
 
-        prompt = "识别图片内容。注意：忽略目录中的所有点号（......）。"
+        # 在 Prompt 里再次强调
+        prompt = "识别图片。注意：不要输出任何连接标题和页码的点号。"
 
-        print("[DEBUG] Sending request to Gemini...")
-        start_time = time.time()
-
-        # 3. 发送请求
+        # print("[DEBUG] Sending request...")
         response = model.generate_content([prompt, img])
 
-        end_time = time.time()
-        print(f"[DEBUG] Request finished in {end_time - start_time:.2f} seconds.")
-
-        # 4. 深度分析响应结果
+        # ==========================================
+        # 结果处理修复：容忍被截断的内容
+        # ==========================================
         if not response.candidates:
-            print("[DEBUG] CRITICAL: Response has NO candidates. Usually means complete blockage or server error.")
-            # 尝试打印 feedback
-            if hasattr(response, 'prompt_feedback'):
-                print(f"[DEBUG] Prompt Feedback: {response.prompt_feedback}")
             return "Error: No candidates returned."
 
         candidate = response.candidates[0]
-        finish_reason = candidate.finish_reason
 
-        # Finish Reason 字典映射
-        reason_map = {
-            0: "UNKNOWN",
-            1: "STOP (Normal)",
-            2: "MAX_TOKENS (Token limit reached - likely loop)",
-            3: "SAFETY (Content blocked)",
-            4: "RECITATION (Copyright/Memorization)",
-            5: "OTHER"
-        }
+        # 检查是否因为 Token 耗尽被截断（目录页常见情况）
+        if candidate.finish_reason == 2:
+            print(f"[Warning] Response truncated due to Max Tokens. Attempting to salvage text.")
 
-        print(f"[DEBUG] Finish Reason Code: {finish_reason} -> {reason_map.get(finish_reason, 'Unknown')}")
-
-        if finish_reason == 3:  # SAFETY
-            print(f"[DEBUG] Safety Ratings: {candidate.safety_ratings}")
-            return "Error: Blocked by safety filters."
-
-        # 5. 安全提取文本
         if candidate.content and candidate.content.parts:
-            text_part = candidate.content.parts[0].text
-            print(f"[DEBUG] Text extracted successfully. Length: {len(text_part)} chars.")
-            print(f"[DEBUG] First 100 chars preview: {text_part[:100].replace(chr(10), ' ')}...")
-            return text_part
+            text = candidate.content.parts[0].text
+            return text
         else:
-            print("[DEBUG] CRITICAL: Candidate exists but has NO text parts.")
-            return "Error: Empty content parts."
+            # 如果之前的死循环太严重，API 可能连 parts 都不返回
+            # 这时候通常是因为 Prompt 没生效，模型还在数点
+            print(f"DEBUG: Finish Reason: {candidate.finish_reason}, Safety: {candidate.safety_ratings}")
+            return "Error: Failed to extract text (likely infinite loop)."
 
     except Exception:
-        print("\n[DEBUG] EXCEPTION OCCURRED:")
         print(traceback.format_exc())
         return 'Please parse again'
-
 
 # def create_generation_config():
 #     return {
