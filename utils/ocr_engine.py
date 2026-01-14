@@ -53,12 +53,8 @@ def get_safety_settings():
 
 
 def img_to_md(image_path, lang="en"):
+    # ... 前面的初始化代码不变 ...
     api_key = random_genai()
-
-    if not os.path.exists(image_path):
-        return "Error: Image file not found."
-
-    # 定义重试次数
     max_retries = 5
 
     for attempt in range(max_retries):
@@ -66,87 +62,78 @@ def img_to_md(image_path, lang="en"):
             genai.configure(api_key=api_key)
             img = PIL.Image.open(image_path)
 
-            # --- 动态调整配置 ---
-            # 如果是重试（attempt > 0），说明第一次可能陷入死循环了
-            # 我们使用更极端的配置：温度降为 0（绝对冷静），Prompt 极简
-            current_temp = 0.1 if attempt == 0 else 0.0
+            # === 默认配置 ===
+            temp = 0.1
+            sys_instruction = f"你是一个 OCR 工具。请识别图中的{lang}文字并转为 Markdown。"
+            prompt_text = "识别图片内容。"
 
-            generation_config = {
-                "temperature": current_temp,
-                "top_p": 0.95,
-                "top_k": 40,
-                "max_output_tokens": 8192,
-                "response_mime_type": "text/plain",
-            }
+            # === 【关键策略修改】 ===
 
-            # 基础 System Instruction
-            base_instruction = (
-                f"你是一个 OCR 工具。识别图中的{lang}文字。"
-                f"遇到目录页的引导点（......），**必须忽略**，直接输出文字和页码。"
-                f"禁止输出连续的点号。"
-            )
+            # 第一次重试 (Attempt 1): 严厉模式 (针对目录死循环)
+            if attempt == 1:
+                temp = 0.0
+                sys_instruction += " **忽略所有连续的点号(......)**。"
 
-            # 如果是重试，加强语气
-            if attempt > 0:
-                print(f"[Warning] Retrying {os.path.basename(image_path)} with STRICT mode...")
-                system_instruction = base_instruction + " **严重警告：不要输出任何点号！不要死循环！**"
-                prompt = "提取文字。忽略所有符号点。"
-            else:
-                system_instruction = base_instruction
-                prompt = "识别图片内容转 Markdown。"
+            # 第二次重试 (Attempt 2): 【防版权模式 - 针对参考文献】
+            # 如果是参考文献页，强制要求改变格式，破坏指纹匹配
+            if attempt == 2:
+                print(f"[Warning] 启用参考文献特殊模式 (Anti-Recitation Mode)...")
+                temp = 0.3  # 稍微增加随机性
+
+                # 核心 Trick：告诉模型这是一个“格式化任务”而不是“读取任务”
+                sys_instruction = (
+                    f"You are a bibliographic data assistant. "
+                    f"The image contains a list of academic references. "
+                    f"Your task is to extract them into a Markdown list. "
+                    f"**IMPORTANT RULE**: To ensure readability, you MUST **bold** the title of every paper."
+                    f"For example: Author Name. **Paper Title**. Publisher."
+                )
+                prompt_text = "Extract references. Remember to **bold** the titles to differentiate them from authors."
 
             model = genai.GenerativeModel(
                 model_name=genai_name,
-                generation_config=generation_config,
-                system_instruction=system_instruction,
+                generation_config={
+                    "temperature": temp,
+                    "top_p": 0.95,
+                    "max_output_tokens": 8192,
+                },
+                system_instruction=sys_instruction,
                 safety_settings=get_safety_settings()
             )
 
-            # 发送请求
-            response = model.generate_content([prompt, img])
+            response = model.generate_content([prompt_text, img])
 
-            # --- 结果检查逻辑 ---
             if not response.candidates:
-                if attempt < max_retries - 1: continue  # 重试
+                if attempt < max_retries - 1: continue
                 return "Error: No candidates."
 
             candidate = response.candidates[0]
             finish_reason = candidate.finish_reason
 
-            # 情况 A: 成功拿到文本
+            # 成功获取
             if candidate.content and candidate.content.parts:
                 text = candidate.content.parts[0].text
-                # 如果是因为 Token 耗尽截断，但在有文本的情况下，通常是可以用的
-                # 我们可以把末尾可能存在的连续点号切掉
-                if finish_reason == 2:
-                    print(f"[Info] Page truncated but text salvaged.")
-                    # 简单的清洗，去掉末尾可能存在的 '....'
-                    text = text.rstrip('. ')
                 return text
 
-            # 情况 B: Token 耗尽且没有文本 (死循环最坏情况)
-            elif finish_reason == 2:
-                print(f"[Debug] Hit Max Tokens loop on attempt {attempt + 1}.")
-                # 这种情况下必须重试，因为没有内容返回
-                if attempt < max_retries - 1:
-                    time.sleep(1)  # 歇一秒再试
-                    continue
-                return "Error: OCR failed due to infinite loop (Max Tokens)."
+            # 失败处理
+            print(f"[Debug] Attempt {attempt + 1} Failed. Reason: {finish_reason}")
 
-            # 情况 C: 安全拦截或其他
-            else:
-                print(f"[Debug] Blocked or Empty. Reason: {finish_reason}")
-                if attempt < max_retries - 1: continue
-                return "Error: Content blocked."
+            # 如果是版权拦截 (4)，让循环继续，自然会进入 attempt=2 的逻辑
+            if finish_reason == 4 or finish_reason == 3:
+                time.sleep(1)
+                continue
+
+            # 如果是死循环 (2)，也继续
+            if finish_reason == 2:
+                time.sleep(1)
+                continue
 
         except Exception as e:
             print(f"[Exception] {e}")
-            if attempt < max_retries - 1:
-                time.sleep(1)
-                continue
-            return 'Please parse again'
+            time.sleep(1)
+            continue
 
-    return "Error: Failed after retries."
+    return "Error: Failed to parse page 19."
 
 # def create_generation_config():
 #     return {
