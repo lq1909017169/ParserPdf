@@ -58,59 +58,95 @@ def img_to_md(image_path, lang="en"):
     if not os.path.exists(image_path):
         return "Error: Image file not found."
 
-    try:
-        genai.configure(api_key=api_key)
-        img = PIL.Image.open(image_path)
+    # 定义重试次数
+    max_retries = 2
 
-        # ==========================================
-        # 核心修复：针对目录页的 Prompt 工程
-        # ==========================================
-        system_instruction = (
-            f"你是一个 OCR 专家。识别图中的{lang}内容并转为 Markdown。"
-            f"这是一个目录页（Table of Contents）。"
-            f"【严重警告】：图中有大量的引导点（如 'Introduction ...... 5'）。"
-            f"在输出时，**绝对禁止**输出连续的点号（......）。"
-            f"请直接忽略中间的点，只输出标题和页码，例如输出 '1 Introduction 5'。"
-            f"保持层级结构。遇到乱码跳过。"
-        )
+    for attempt in range(max_retries):
+        try:
+            genai.configure(api_key=api_key)
+            img = PIL.Image.open(image_path)
 
-        model = genai.GenerativeModel(
-            model_name=genai_name,
-            generation_config=create_generation_config(),
-            system_instruction=system_instruction,
-            safety_settings=get_safety_settings()
-        )
+            # --- 动态调整配置 ---
+            # 如果是重试（attempt > 0），说明第一次可能陷入死循环了
+            # 我们使用更极端的配置：温度降为 0（绝对冷静），Prompt 极简
+            current_temp = 0.1 if attempt == 0 else 0.0
 
-        # 在 Prompt 里再次强调
-        prompt = "识别图片。注意：不要输出任何连接标题和页码的点号。"
+            generation_config = {
+                "temperature": current_temp,
+                "top_p": 0.95,
+                "top_k": 40,
+                "max_output_tokens": 8192,
+                "response_mime_type": "text/plain",
+            }
 
-        # print("[DEBUG] Sending request...")
-        response = model.generate_content([prompt, img])
+            # 基础 System Instruction
+            base_instruction = (
+                f"你是一个 OCR 工具。识别图中的{lang}文字。"
+                f"遇到目录页的引导点（......），**必须忽略**，直接输出文字和页码。"
+                f"禁止输出连续的点号。"
+            )
 
-        # ==========================================
-        # 结果处理修复：容忍被截断的内容
-        # ==========================================
-        if not response.candidates:
-            return "Error: No candidates returned."
+            # 如果是重试，加强语气
+            if attempt > 0:
+                print(f"[Warning] Retrying {os.path.basename(image_path)} with STRICT mode...")
+                system_instruction = base_instruction + " **严重警告：不要输出任何点号！不要死循环！**"
+                prompt = "提取文字。忽略所有符号点。"
+            else:
+                system_instruction = base_instruction
+                prompt = "识别图片内容转 Markdown。"
 
-        candidate = response.candidates[0]
+            model = genai.GenerativeModel(
+                model_name=genai_name,
+                generation_config=generation_config,
+                system_instruction=system_instruction,
+                safety_settings=get_safety_settings()
+            )
 
-        # 检查是否因为 Token 耗尽被截断（目录页常见情况）
-        if candidate.finish_reason == 2:
-            print(f"[Warning] Response truncated due to Max Tokens. Attempting to salvage text.")
+            # 发送请求
+            response = model.generate_content([prompt, img])
 
-        if candidate.content and candidate.content.parts:
-            text = candidate.content.parts[0].text
-            return text
-        else:
-            # 如果之前的死循环太严重，API 可能连 parts 都不返回
-            # 这时候通常是因为 Prompt 没生效，模型还在数点
-            print(f"DEBUG: Finish Reason: {candidate.finish_reason}, Safety: {candidate.safety_ratings}")
-            return "Error: Failed to extract text (likely infinite loop)."
+            # --- 结果检查逻辑 ---
+            if not response.candidates:
+                if attempt < max_retries - 1: continue  # 重试
+                return "Error: No candidates."
 
-    except Exception:
-        print(traceback.format_exc())
-        return 'Please parse again'
+            candidate = response.candidates[0]
+            finish_reason = candidate.finish_reason
+
+            # 情况 A: 成功拿到文本
+            if candidate.content and candidate.content.parts:
+                text = candidate.content.parts[0].text
+                # 如果是因为 Token 耗尽截断，但在有文本的情况下，通常是可以用的
+                # 我们可以把末尾可能存在的连续点号切掉
+                if finish_reason == 2:
+                    print(f"[Info] Page truncated but text salvaged.")
+                    # 简单的清洗，去掉末尾可能存在的 '....'
+                    text = text.rstrip('. ')
+                return text
+
+            # 情况 B: Token 耗尽且没有文本 (死循环最坏情况)
+            elif finish_reason == 2:
+                print(f"[Debug] Hit Max Tokens loop on attempt {attempt + 1}.")
+                # 这种情况下必须重试，因为没有内容返回
+                if attempt < max_retries - 1:
+                    time.sleep(1)  # 歇一秒再试
+                    continue
+                return "Error: OCR failed due to infinite loop (Max Tokens)."
+
+            # 情况 C: 安全拦截或其他
+            else:
+                print(f"[Debug] Blocked or Empty. Reason: {finish_reason}")
+                if attempt < max_retries - 1: continue
+                return "Error: Content blocked."
+
+        except Exception as e:
+            print(f"[Exception] {e}")
+            if attempt < max_retries - 1:
+                time.sleep(1)
+                continue
+            return 'Please parse again'
+
+    return "Error: Failed after retries."
 
 # def create_generation_config():
 #     return {
