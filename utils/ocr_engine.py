@@ -59,7 +59,7 @@ def img_to_md(image_path, lang="en"):
         return "Error: Image file not found."
 
     # 定义重试次数
-    max_retries = 2
+    max_retries = 5
 
     for attempt in range(max_retries):
         try:
