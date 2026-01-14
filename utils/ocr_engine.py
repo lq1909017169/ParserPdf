@@ -53,27 +53,35 @@ def get_safety_settings():
 
 
 def img_to_md(image_path, lang="en"):
+    print(f"\n========== STARTING OCR FOR: {os.path.basename(image_path)} ==========")
     api_key = random_genai()
-    print(f'Using model: {genai_name} | Key ending: {api_key[-4:]}')
 
-    if not api_key:
-        return "Error: No API key available."
+    # 打印关键配置信息
+    print(f"[DEBUG] Using Model Name: '{genai_name}'")
+    print(f"[DEBUG] API Key (last 4 chars): ...{api_key[-4:]}")
+
+    if not os.path.exists(image_path):
+        print(f"[DEBUG] ERROR: Image path does not exist: {image_path}")
+        return "Error: Image file not found."
 
     try:
         genai.configure(api_key=api_key)
 
-        # 1. 核心修改：使用 PIL 打开图片，不再上传文件到 File API
-        # 这种方式对于单张截图 OCR 更稳定、更快
-        img = PIL.Image.open(image_path)
+        # 1. 加载并检查图片
+        try:
+            img = PIL.Image.open(image_path)
+            print(f"[DEBUG] Image Loaded Successfully. Size: {img.size}, Format: {img.format}, Mode: {img.mode}")
+        except Exception as e:
+            print(f"[DEBUG] PIL Error loading image: {e}")
+            return "Error: Invalid image file."
 
-        # 2. 优化 System Instruction
-        # 移除了强制表格的指令，增加了针对目录页的特殊处理（去除点号）
+        # 2. 准备 Prompt
         system_instruction = (
-            f"你是一个专业的 OCR 工具。请识别图中的所有{lang}文字。"
-            f"直接输出 Markdown。不要包含任何解释性语句（如'这是转换后的内容'）。"
-            f"如果遇到目录或列表，保持层级结构，**不要**输出连接页码的一连串点号（......）。"
-            f"如果遇到数学公式，请使用 LaTeX 格式。"
-            f"如果遇到无法识别的乱码，直接跳过。"
+            f"你是一个 OCR 专家。识别图中的{lang}内容并转为 Markdown。"
+            f"规则 1：如果遇到目录中的引导点（如 'Introduction ...... 5'），**绝对不要**输出中间的点号，直接输出 'Introduction 5' 或使用空格分隔。"
+            f"规则 2：不要输出任何 Markdown 代码块标记（如 ```markdown），直接输出内容。"
+            f"规则 3：如果遇到数学公式，使用 LaTeX 格式。"
+            f"规则 4：若遇到乱码或无法识别，直接跳过。"
         )
 
         model = genai.GenerativeModel(
@@ -83,26 +91,59 @@ def img_to_md(image_path, lang="en"):
             safety_settings=get_safety_settings()
         )
 
-        # 3. Prompt 简单明了
-        prompt = "请精准识别图片内容并转换为 Markdown。"
+        prompt = "识别图片内容。注意：忽略目录中的所有点号（......）。"
 
-        # 直接传入 img 对象
+        print("[DEBUG] Sending request to Gemini...")
+        start_time = time.time()
+
+        # 3. 发送请求
         response = model.generate_content([prompt, img])
 
-        # 4. 结果处理
-        if response.text:
-            return response.text
+        end_time = time.time()
+        print(f"[DEBUG] Request finished in {end_time - start_time:.2f} seconds.")
+
+        # 4. 深度分析响应结果
+        if not response.candidates:
+            print("[DEBUG] CRITICAL: Response has NO candidates. Usually means complete blockage or server error.")
+            # 尝试打印 feedback
+            if hasattr(response, 'prompt_feedback'):
+                print(f"[DEBUG] Prompt Feedback: {response.prompt_feedback}")
+            return "Error: No candidates returned."
+
+        candidate = response.candidates[0]
+        finish_reason = candidate.finish_reason
+
+        # Finish Reason 字典映射
+        reason_map = {
+            0: "UNKNOWN",
+            1: "STOP (Normal)",
+            2: "MAX_TOKENS (Token limit reached - likely loop)",
+            3: "SAFETY (Content blocked)",
+            4: "RECITATION (Copyright/Memorization)",
+            5: "OTHER"
+        }
+
+        print(f"[DEBUG] Finish Reason Code: {finish_reason} -> {reason_map.get(finish_reason, 'Unknown')}")
+
+        if finish_reason == 3:  # SAFETY
+            print(f"[DEBUG] Safety Ratings: {candidate.safety_ratings}")
+            return "Error: Blocked by safety filters."
+
+        # 5. 安全提取文本
+        if candidate.content and candidate.content.parts:
+            text_part = candidate.content.parts[0].text
+            print(f"[DEBUG] Text extracted successfully. Length: {len(text_part)} chars.")
+            print(f"[DEBUG] First 100 chars preview: {text_part[:100].replace(chr(10), ' ')}...")
+            return text_part
         else:
-            print("Response text is empty. Checking candidates...")
-            if response.candidates:
-                print(f"Finish Reason: {response.candidates[0].finish_reason}")
-                return response.candidates[0].content.parts[0].text
-            return "Error: Empty response"
+            print("[DEBUG] CRITICAL: Candidate exists but has NO text parts.")
+            return "Error: Empty content parts."
 
     except Exception:
+        print("\n[DEBUG] EXCEPTION OCCURRED:")
         print(traceback.format_exc())
-        # 有时候是因为图片太大或格式问题，可以尝试 resize (可选)
         return 'Please parse again'
+
 
 # def create_generation_config():
 #     return {
