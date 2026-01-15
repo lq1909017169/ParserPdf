@@ -78,7 +78,7 @@ def load_image_part(image_path):
 
 def img_to_md(image_path, lang="en"):
     try:
-        KEY_PATH = 'key_json/key.json'
+        KEY_PATH = '/usr/local/src/pypro/ParserPdf/utils/key_json/key.json'
         PROJECT_ID = "eyeweb-wb-ys"
         LOCATION = "us-central1"
         if os.path.exists(KEY_PATH):
