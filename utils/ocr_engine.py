@@ -4,7 +4,8 @@
 # import google.generativeai as genai
 #
 # import traceback
-# import PIL.Image
+from PIL import Image
+import io
 import random
 from dotenv import load_dotenv
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
@@ -69,11 +70,33 @@ def get_safety_settings():
 
 
 def load_image_part(image_path):
-    with open(image_path, "rb") as f:
-        image_data = f.read()
-    mime_type, _ = mimetypes.guess_type(image_path)
-    if not mime_type: mime_type = "image/jpeg"
-    return Part.from_data(data=image_data, mime_type=mime_type)
+    """
+    核心修复：
+    不直接读取文件字节，而是用 PIL 打开，
+    强制转换为 RGB 模式（防止 CMYK 报错），
+    并重新保存为标准 JPEG 字节流。
+    """
+    try:
+        # 1. 用 PIL 打开图片
+        with Image.open(image_path) as img:
+            # 2. 转换为 RGB (防止 PNG 透明通道或 CMYK 导致 400 错误)
+            if img.mode != 'RGB':
+                img = img.convert('RGB')
+
+            # 3. 保存到内存中的 BytesIO 对象
+            img_byte_arr = io.BytesIO()
+            # 强制指定格式为 JPEG，质量 95
+            img.save(img_byte_arr, format='JPEG', quality=95)
+
+            # 4. 获取字节数据
+            image_data = img_byte_arr.getvalue()
+
+        # 5. 返回 Vertex AI 需要的 Part 对象，明确指定 mime_type 为 image/jpeg
+        return Part.from_data(data=image_data, mime_type="image/jpeg")
+
+    except Exception as e:
+        print(f"❌ Image processing failed: {e}")
+        raise
 
 
 def img_to_md(image_path, lang="en"):
