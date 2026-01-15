@@ -1,11 +1,27 @@
-import os
-import time
-import traceback
-import google.generativeai as genai
+# import os
+# import time
+# import traceback
+# import google.generativeai as genai
+#
+# import traceback
+# import PIL.Image
 import random
 from dotenv import load_dotenv
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
-import PIL.Image
+import os
+import time
+import mimetypes
+from google.oauth2 import service_account
+import vertexai
+from vertexai.generative_models import (
+    GenerativeModel,
+    Part,
+    FinishReason,
+    HarmCategory,
+    HarmBlockThreshold,
+    GenerationConfig
+)
+
 
 # 加载环境变量
 load_dotenv()
@@ -45,63 +61,89 @@ def create_generation_config():
 
 def get_safety_settings():
     return {
-        HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
         HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-        HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
         HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+        HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+        HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
     }
 
 
+def load_image_part(image_path):
+    with open(image_path, "rb") as f:
+        image_data = f.read()
+    mime_type, _ = mimetypes.guess_type(image_path)
+    if not mime_type: mime_type = "image/jpeg"
+    return Part.from_data(data=image_data, mime_type=mime_type)
+
+
 def img_to_md(image_path, lang="en"):
-    # ... 前面的初始化代码不变 ...
-    api_key = random_genai()
-    max_retries = 5
+    try:
+        KEY_PATH = 'key_json/key.json'
+        PROJECT_ID = "eyeweb-wb-ys"
+        LOCATION = "us-central1"
+        if os.path.exists(KEY_PATH):
+            # 使用服务账号 JSON 文件进行认证
+            credentials = service_account.Credentials.from_service_account_file(KEY_PATH)
+            vertexai.init(project=PROJECT_ID, location=LOCATION, credentials=credentials)
+            print(f"✅ Vertex AI initialized successfully: {PROJECT_ID} @ {LOCATION}")
+        else:
+            print(f"❌ Error: 找不到密钥文件 '{KEY_PATH}'。请去 GCP 后台下载 JSON 密钥。")
+            # 如果你已经在环境变量里配好了，可以尝试无参初始化
+            # vertexai.init(project=PROJECT_ID, location=LOCATION)
+    except Exception as e:
+        print(f"❌ Vertex AI init failed: {e}")
+
+    print(f"\n========== PROCESSING: {os.path.basename(image_path)} ==========")
+
+    if not os.path.exists(image_path):
+        return "Error: Image file not found."
+
+    max_retries = 3
 
     for attempt in range(max_retries):
         try:
-            genai.configure(api_key=api_key)
-            img = PIL.Image.open(image_path)
+            image_part = load_image_part(image_path)
 
-            # === 默认配置 ===
+            # === 动态策略 ===
             temp = 0.1
-            sys_instruction = f"你是一个 OCR 工具。请识别图中的{lang}文字并转为 Markdown。"
-            prompt_text = "识别图片内容。"
-
-            # === 【关键策略修改】 ===
-
-            # 第一次重试 (Attempt 1): 严厉模式 (针对目录死循环)
-            if attempt == 1:
-                temp = 0.0
-                sys_instruction += " **忽略所有连续的点号(......)**。"
-
-            # 第二次重试 (Attempt 2): 【防版权模式 - 针对参考文献】
-            # 如果是参考文献页，强制要求改变格式，破坏指纹匹配
-            if attempt == 2:
-                print(f"[Warning] 启用参考文献特殊模式 (Anti-Recitation Mode)...")
-                temp = 0.3  # 稍微增加随机性
-
-                # 核心 Trick：告诉模型这是一个“格式化任务”而不是“读取任务”
-                sys_instruction = (
-                    f"You are a bibliographic data assistant. "
-                    f"The image contains a list of academic references. "
-                    f"Your task is to extract them into a Markdown list. "
-                    f"**IMPORTANT RULE**: To ensure readability, you MUST **bold** the title of every paper."
-                    f"For example: Author Name. **Paper Title**. Publisher."
-                )
-                prompt_text = "Extract references. Remember to **bold** the titles to differentiate them from authors."
-
-            model = genai.GenerativeModel(
-                model_name=genai_name,
-                generation_config={
-                    "temperature": temp,
-                    "top_p": 0.95,
-                    "max_output_tokens": 8192,
-                },
-                system_instruction=sys_instruction,
-                safety_settings=get_safety_settings()
+            prompt_text = "识别图片内容并转换为 Markdown 格式。"
+            sys_instruction = (
+                f"你是一个专业的 OCR 工具。请识别图中的{lang}文字。"
+                f"遇到目录页的引导点（......），**必须忽略**，直接输出文字和页码。"
+                f"如果是数学公式，请使用 LaTeX。"
             )
 
-            response = model.generate_content([prompt_text, img])
+            # 策略 1: 针对目录死循环 (Reason 2)
+            if attempt == 1:
+                print(f"[Warning] Retrying (Strict Mode)...")
+                temp = 0.0
+                sys_instruction += " **严重警告：绝对禁止输出任何连续的点号(......)！**"
+                prompt_text = "提取文字。忽略所有装饰符号。"
+
+            # 策略 2: 针对参考文献版权拦截 (Reason 4)
+            if attempt == 2:
+                print(f"[Warning] Retrying (Anti-Recitation Mode)...")
+                temp = 0.4
+                # 强行要求加粗标题，破坏文本指纹
+                sys_instruction = (
+                    f"You are a bibliographic data assistant. "
+                    f"Extract references from the image into Markdown. "
+                    f"**IMPORTANT RULE**: You MUST **bold** the title of every paper/section."
+                    f"Example: Author Name. **Paper Title**. Publisher."
+                )
+                prompt_text = "Extract content. Remember to **bold** titles."
+
+            model = GenerativeModel(genai_name, system_instruction=[sys_instruction])
+
+            response = model.generate_content(
+                [prompt_text, image_part],
+                generation_config=GenerationConfig(
+                    temperature=temp,
+                    top_p=0.95,
+                    max_output_tokens=8192,
+                ),
+                safety_settings=get_safety_settings()
+            )
 
             if not response.candidates:
                 if attempt < max_retries - 1: continue
@@ -110,31 +152,136 @@ def img_to_md(image_path, lang="en"):
             candidate = response.candidates[0]
             finish_reason = candidate.finish_reason
 
-            # 成功获取
+            # === 成功 ===
             if candidate.content and candidate.content.parts:
                 text = candidate.content.parts[0].text
+                if finish_reason == FinishReason.MAX_TOKENS:
+                    text = text.rstrip('. ')
                 return text
 
-            # 失败处理
-            print(f"[Debug] Attempt {attempt + 1} Failed. Reason: {finish_reason}")
+            # === 失败处理 ===
+            print(f"[Debug] Attempt {attempt + 1} Failed. Reason Code: {finish_reason}")
 
-            # 如果是版权拦截 (4)，让循环继续，自然会进入 attempt=2 的逻辑
-            if finish_reason == 4 or finish_reason == 3:
+            # Reason 4: RECITATION (版权) -> 下一次循环触发 Attempt 2
+            if finish_reason == FinishReason.RECITATION:
                 time.sleep(1)
                 continue
 
-            # 如果是死循环 (2)，也继续
-            if finish_reason == 2:
+            # Reason 2: MAX_TOKENS (死循环) -> 下一次循环触发 Attempt 1
+            if finish_reason == FinishReason.MAX_TOKENS:
                 time.sleep(1)
                 continue
+
+            if attempt < max_retries - 1:
+                time.sleep(1)
+                continue
+
+            return f"Error: Blocked with reason {finish_reason}"
 
         except Exception as e:
             print(f"[Exception] {e}")
-            time.sleep(1)
-            continue
+            if attempt < max_retries - 1:
+                time.sleep(2)
+                continue
+            return 'Please parse again'
 
-    return "Error: Failed to parse page 19."
+    return "Error: Failed after retries."
 
+
+# def get_safety_settings():
+#     return {
+#         HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+#         HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+#         HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+#         HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+#     }
+#
+#
+# def img_to_md(image_path, lang="en"):
+#     # ... 前面的初始化代码不变 ...
+#     api_key = random_genai()
+#     max_retries = 5
+#
+#     for attempt in range(max_retries):
+#         try:
+#             genai.configure(api_key=api_key)
+#             img = PIL.Image.open(image_path)
+#
+#             # === 默认配置 ===
+#             temp = 0.1
+#             sys_instruction = f"你是一个 OCR 工具。请识别图中的{lang}文字并转为 Markdown。"
+#             prompt_text = "识别图片内容。"
+#
+#             # === 【关键策略修改】 ===
+#
+#             # 第一次重试 (Attempt 1): 严厉模式 (针对目录死循环)
+#             if attempt == 1:
+#                 temp = 0.0
+#                 sys_instruction += " **忽略所有连续的点号(......)**。"
+#
+#             # 第二次重试 (Attempt 2): 【防版权模式 - 针对参考文献】
+#             # 如果是参考文献页，强制要求改变格式，破坏指纹匹配
+#             if attempt == 2:
+#                 print(f"[Warning] 启用参考文献特殊模式 (Anti-Recitation Mode)...")
+#                 temp = 0.3  # 稍微增加随机性
+#
+#                 # 核心 Trick：告诉模型这是一个“格式化任务”而不是“读取任务”
+#                 sys_instruction = (
+#                     f"You are a bibliographic data assistant. "
+#                     f"The image contains a list of academic references. "
+#                     f"Your task is to extract them into a Markdown list. "
+#                     f"**IMPORTANT RULE**: To ensure readability, you MUST **bold** the title of every paper."
+#                     f"For example: Author Name. **Paper Title**. Publisher."
+#                 )
+#                 prompt_text = "Extract references. Remember to **bold** the titles to differentiate them from authors."
+#
+#             model = genai.GenerativeModel(
+#                 model_name=genai_name,
+#                 generation_config={
+#                     "temperature": temp,
+#                     "top_p": 0.95,
+#                     "max_output_tokens": 8192,
+#                 },
+#                 system_instruction=sys_instruction,
+#                 safety_settings=get_safety_settings()
+#             )
+#
+#             response = model.generate_content([prompt_text, img])
+#
+#             if not response.candidates:
+#                 if attempt < max_retries - 1: continue
+#                 return "Error: No candidates."
+#
+#             candidate = response.candidates[0]
+#             finish_reason = candidate.finish_reason
+#
+#             # 成功获取
+#             if candidate.content and candidate.content.parts:
+#                 text = candidate.content.parts[0].text
+#                 return text
+#
+#             # 失败处理
+#             print(f"[Debug] Attempt {attempt + 1} Failed. Reason: {finish_reason}")
+#
+#             # 如果是版权拦截 (4)，让循环继续，自然会进入 attempt=2 的逻辑
+#             if finish_reason == 4 or finish_reason == 3:
+#                 time.sleep(1)
+#                 continue
+#
+#             # 如果是死循环 (2)，也继续
+#             if finish_reason == 2:
+#                 time.sleep(1)
+#                 continue
+#
+#         except Exception as e:
+#             print(f"[Exception] {e}")
+#             time.sleep(1)
+#             continue
+#
+#     return "Error: Failed to parse page 19."
+
+
+# 下面为旧版
 # def create_generation_config():
 #     return {
 #         "temperature": 0.1,
