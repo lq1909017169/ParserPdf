@@ -69,53 +69,46 @@ def get_safety_settings():
     }
 
 
+KEY_PATH = "/usr/local/src/pypro/ParserPdf/utils/key_json/key.json"
+PROJECT_ID = "eyeweb-wb-ys"
+LOCATION = "us-central1"
+
+# 改用 001 版本，这是目前 Vertex AI 上最“耐操”的版本
+MODEL_NAME = "gemini-1.5-flash-001"
+
+# ================= 初始化 =================
+try:
+    if os.path.exists(KEY_PATH):
+        credentials = service_account.Credentials.from_service_account_file(KEY_PATH)
+        vertexai.init(project=PROJECT_ID, location=LOCATION, credentials=credentials)
+        print(f"✅ Vertex AI initialized: {PROJECT_ID}")
+    else:
+        print(f"⚠️ Key file missing. Trying default credentials.")
+        vertexai.init(project=PROJECT_ID, location=LOCATION)
+except Exception as e:
+    print(f"❌ Init failed: {e}")
+
+
+# =========================================
+
 def load_image_part(image_path):
     """
-    核心修复：
-    不直接读取文件字节，而是用 PIL 打开，
-    强制转换为 RGB 模式（防止 CMYK 报错），
-    并重新保存为标准 JPEG 字节流。
+    强制清洗图片为 RGB JPEG，防止格式兼容性导致的 400 错误
     """
     try:
-        # 1. 用 PIL 打开图片
         with Image.open(image_path) as img:
-            # 2. 转换为 RGB (防止 PNG 透明通道或 CMYK 导致 400 错误)
             if img.mode != 'RGB':
                 img = img.convert('RGB')
-
-            # 3. 保存到内存中的 BytesIO 对象
             img_byte_arr = io.BytesIO()
-            # 强制指定格式为 JPEG，质量 95
             img.save(img_byte_arr, format='JPEG', quality=95)
-
-            # 4. 获取字节数据
             image_data = img_byte_arr.getvalue()
-
-        # 5. 返回 Vertex AI 需要的 Part 对象，明确指定 mime_type 为 image/jpeg
         return Part.from_data(data=image_data, mime_type="image/jpeg")
-
     except Exception as e:
         print(f"❌ Image processing failed: {e}")
         raise
 
 
 def img_to_md(image_path, lang="en"):
-    try:
-        KEY_PATH = '/usr/local/src/pypro/ParserPdf/utils/key_json/key.json'
-        PROJECT_ID = "eyeweb-wb-ys"
-        LOCATION = "us-central1"
-        if os.path.exists(KEY_PATH):
-            # 使用服务账号 JSON 文件进行认证
-            credentials = service_account.Credentials.from_service_account_file(KEY_PATH)
-            vertexai.init(project=PROJECT_ID, location=LOCATION, credentials=credentials)
-            print(f"✅ Vertex AI initialized successfully: {PROJECT_ID} @ {LOCATION}")
-        else:
-            print(f"❌ Error: 找不到密钥文件 '{KEY_PATH}'。请去 GCP 后台下载 JSON 密钥。")
-            # 如果你已经在环境变量里配好了，可以尝试无参初始化
-            # vertexai.init(project=PROJECT_ID, location=LOCATION)
-    except Exception as e:
-        print(f"❌ Vertex AI init failed: {e}")
-
     print(f"\n========== PROCESSING: {os.path.basename(image_path)} ==========")
 
     if not os.path.exists(image_path):
@@ -127,45 +120,40 @@ def img_to_md(image_path, lang="en"):
         try:
             image_part = load_image_part(image_path)
 
-            # === 动态策略 ===
-            temp = 0.1
-            prompt_text = "识别图片内容并转换为 Markdown 格式。"
-            sys_instruction = (
-                f"你是一个专业的 OCR 工具。请识别图中的{lang}文字。"
-                f"遇到目录页的引导点（......），**必须忽略**，直接输出文字和页码。"
-                f"如果是数学公式，请使用 LaTeX。"
-            )
+            # === 核心修改：将 System Instruction 合并到 Prompt 中 ===
+            # 这种方式绕过了 SDK 对 system_instruction 参数的严格校验，避免 400 错误
 
-            # 策略 1: 针对目录死循环 (Reason 2)
+            base_role = f"你是一个专业的 OCR 工具。请识别图中的{lang}文字。"
+            specific_rule = "遇到目录页的引导点（......），**必须忽略**，直接输出文字和页码。"
+            task = "识别图片内容并转换为 Markdown。"
+
+            # 策略 1: 严格模式 (针对目录死循环)
             if attempt == 1:
                 print(f"[Warning] Retrying (Strict Mode)...")
-                temp = 0.0
-                sys_instruction += " **严重警告：绝对禁止输出任何连续的点号(......)！**"
-                prompt_text = "提取文字。忽略所有装饰符号。"
+                specific_rule = "**严重警告：绝对禁止输出任何连续的点号(......)！遇到请直接删除！**"
+                task = "提取文字。忽略所有装饰符号。"
 
-            # 策略 2: 针对参考文献版权拦截 (Reason 4)
+            # 策略 2: 防版权模式
             if attempt == 2:
                 print(f"[Warning] Retrying (Anti-Recitation Mode)...")
-                temp = 0.4
-                # 强行要求加粗标题，破坏文本指纹
-                sys_instruction = (
-                    f"You are a bibliographic data assistant. "
-                    f"Extract references from the image into Markdown. "
-                    f"**IMPORTANT RULE**: You MUST **bold** the title of every paper/section."
-                    f"Example: Author Name. **Paper Title**. Publisher."
-                )
-                prompt_text = "Extract content. Remember to **bold** titles."
+                base_role = "You are a bibliographic data assistant."
+                specific_rule = "**IMPORTANT**: You MUST **bold** the title of every paper."
+                task = "Extract references. **Bold** the titles."
 
-            model = GenerativeModel(genai_name, system_instruction=[sys_instruction])
+            # 拼接最终 Prompt
+            full_prompt_text = f"{base_role}\n{specific_rule}\nTask: {task}"
 
+            # 初始化模型 (不传 system_instruction)
+            model = GenerativeModel(MODEL_NAME)
+
+            # 发送请求 (移除了 safety_settings 以排除干扰)
             response = model.generate_content(
-                [prompt_text, image_part],
+                [full_prompt_text, image_part],
                 generation_config=GenerationConfig(
-                    temperature=temp,
+                    temperature=0.1 if attempt < 2 else 0.4,
                     top_p=0.95,
                     max_output_tokens=8192,
-                ),
-                safety_settings=get_safety_settings()
+                )
             )
 
             if not response.candidates:
@@ -185,12 +173,11 @@ def img_to_md(image_path, lang="en"):
             # === 失败处理 ===
             print(f"[Debug] Attempt {attempt + 1} Failed. Reason Code: {finish_reason}")
 
-            # Reason 4: RECITATION (版权) -> 下一次循环触发 Attempt 2
-            if finish_reason == FinishReason.RECITATION:
+            # 如果是 Blocked，通常是 FinishReason.SAFETY (3) 或 RECITATION (4)
+            if finish_reason == FinishReason.RECITATION or finish_reason == FinishReason.SAFETY:
                 time.sleep(1)
                 continue
 
-            # Reason 2: MAX_TOKENS (死循环) -> 下一次循环触发 Attempt 1
             if finish_reason == FinishReason.MAX_TOKENS:
                 time.sleep(1)
                 continue
@@ -203,6 +190,10 @@ def img_to_md(image_path, lang="en"):
 
         except Exception as e:
             print(f"[Exception] {e}")
+            # 如果依然报错，打印详细参数以便排查
+            if "400" in str(e):
+                print("❌ 400 Error persists. Likely Project Quota or Region limitation.")
+
             if attempt < max_retries - 1:
                 time.sleep(2)
                 continue
