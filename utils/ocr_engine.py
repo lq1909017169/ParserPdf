@@ -73,8 +73,7 @@ KEY_PATH = "/usr/local/src/pypro/ParserPdf/utils/key_json/key.json"
 PROJECT_ID = "eyeweb-wb-ys"
 LOCATION = "us-central1"
 
-# 改用 001 版本，这是目前 Vertex AI 上最“耐操”的版本
-MODEL_NAME = "gemini-1.5-flash-001"
+MODEL_NAME = "gemini-1.5-flash-002"
 
 # ================= 初始化 =================
 try:
