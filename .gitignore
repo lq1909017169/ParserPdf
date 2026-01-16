@@ -1,6 +1,7 @@
 # 忽略环境变量文件（包含敏感 Key）
 .env
 key.json
+demo.py
 
 # 忽略 Python 编译文件和虚拟环境
 __pycache__/

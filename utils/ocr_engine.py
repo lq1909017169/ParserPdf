@@ -4,7 +4,7 @@
 # import google.generativeai as genai
 #
 # import traceback
-from PIL import Image
+# from PIL import Image
 import io
 import random
 from dotenv import load_dotenv
@@ -20,7 +20,8 @@ from vertexai.generative_models import (
     FinishReason,
     HarmCategory,
     HarmBlockThreshold,
-    GenerationConfig
+    GenerationConfig,
+    Image
 )
 
 
@@ -60,7 +61,35 @@ def create_generation_config():
     }
 
 
+# 你的 JSON 密钥路径
+KEY_PATH = "/usr/local/src/pypro/ParserPdf/utils/key_json/key.json"
+
+# 你的项目 ID
+PROJECT_ID = "eyeweb-wb-ys"
+
+# 【关键修改】Gemini 3 Preview 通常需要 global 区域
+LOCATION = "global"
+
+# 使用你验证成功的模型
+MODEL_NAME = "gemini-3-pro-preview"
+
+# ================= 初始化 =================
+try:
+    print(f"🔄 Initializing Vertex AI ({LOCATION})...")
+    if os.path.exists(KEY_PATH):
+        credentials = service_account.Credentials.from_service_account_file(KEY_PATH)
+        vertexai.init(project=PROJECT_ID, location=LOCATION, credentials=credentials)
+        print(f"✅ Vertex AI initialized using {MODEL_NAME}")
+    else:
+        print(f"⚠️ Key file missing at {KEY_PATH}")
+except Exception as e:
+    print(f"❌ Init failed: {e}")
+
+
+# =========================================
+
 def get_safety_settings():
+    """放宽安全限制"""
     return {
         HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
         HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
@@ -69,46 +98,14 @@ def get_safety_settings():
     }
 
 
-KEY_PATH = "/usr/local/src/pypro/ParserPdf/utils/key_json/key.json"
-PROJECT_ID = "eyeweb-wb-ys"
-LOCATION = "us-central1"
-
-MODEL_NAME = "gemini-pro"
-
-# ================= 初始化 =================
-try:
-    if os.path.exists(KEY_PATH):
-        credentials = service_account.Credentials.from_service_account_file(KEY_PATH)
-        vertexai.init(project=PROJECT_ID, location=LOCATION, credentials=credentials)
-        print(f"✅ Vertex AI initialized: {PROJECT_ID}")
-    else:
-        print(f"⚠️ Key file missing. Trying default credentials.")
-        vertexai.init(project=PROJECT_ID, location=LOCATION)
-except Exception as e:
-    print(f"❌ Init failed: {e}")
-
-
-# =========================================
-
-def load_image_part(image_path):
-    """
-    强制清洗图片为 RGB JPEG，防止格式兼容性导致的 400 错误
-    """
-    try:
-        with Image.open(image_path) as img:
-            if img.mode != 'RGB':
-                img = img.convert('RGB')
-            img_byte_arr = io.BytesIO()
-            img.save(img_byte_arr, format='JPEG', quality=95)
-            image_data = img_byte_arr.getvalue()
-        return Part.from_data(data=image_data, mime_type="image/jpeg")
-    except Exception as e:
-        print(f"❌ Image processing failed: {e}")
-        raise
-
-
 def img_to_md(image_path, lang="en"):
-    print(f"\n========== PROCESSING: {os.path.basename(image_path)} ==========")
+    """
+    优化后的 OCR 函数：
+    1. 使用 Gemini 3 Pro Preview
+    2. 使用 Vertex AI Image 类加载
+    3. 包含针对目录页和版权页的自动修复逻辑
+    """
+    # print(f"\n========== PROCESSING: {os.path.basename(image_path)} ==========")
 
     if not os.path.exists(image_path):
         return "Error: Image file not found."
@@ -117,44 +114,56 @@ def img_to_md(image_path, lang="en"):
 
     for attempt in range(max_retries):
         try:
-            image_part = load_image_part(image_path)
+            # 1. 使用 SDK 原生方式加载图片 (代码更简洁)
+            img = Image.load_from_file(image_path)
 
-            # === 核心修改：将 System Instruction 合并到 Prompt 中 ===
-            # 这种方式绕过了 SDK 对 system_instruction 参数的严格校验，避免 400 错误
+            # 2. 动态 Prompt 策略 (应对死循环和版权拦截)
 
-            base_role = f"你是一个专业的 OCR 工具。请识别图中的{lang}文字。"
-            specific_rule = "遇到目录页的引导点（......），**必须忽略**，直接输出文字和页码。"
-            task = "识别图片内容并转换为 Markdown。"
+            # --- Attempt 0: 正常模式 ---
+            prompt_parts = [
+                f"你是一个专业的 OCR 工具。请识别图中的{lang}文字并转换为 Markdown。",
+                "如果是数学公式，请严格使用 LaTeX 格式（如 $$...$$）。",
+                "遇到目录页的引导点（......），**必须忽略**，直接输出文字和页码。",
+                img  # 图片对象直接放入列表
+            ]
 
-            # 策略 1: 严格模式 (针对目录死循环)
+            # --- Attempt 1: 严格模式 (针对目录页死循环) ---
             if attempt == 1:
-                print(f"[Warning] Retrying (Strict Mode)...")
-                specific_rule = "**严重警告：绝对禁止输出任何连续的点号(......)！遇到请直接删除！**"
-                task = "提取文字。忽略所有装饰符号。"
+                print(f"[Warning] Retrying {os.path.basename(image_path)} (Strict Mode)...")
+                prompt_parts = [
+                    "提取文字。**严重警告：绝对禁止输出任何连续的点号(......)！遇到请直接删除！**",
+                    "忽略所有装饰性符号，只保留文本和数字。",
+                    img
+                ]
 
-            # 策略 2: 防版权模式
+            # --- Attempt 2: 防版权模式 (针对参考文献页) ---
             if attempt == 2:
-                print(f"[Warning] Retrying (Anti-Recitation Mode)...")
-                base_role = "You are a bibliographic data assistant."
-                specific_rule = "**IMPORTANT**: You MUST **bold** the title of every paper."
-                task = "Extract references. **Bold** the titles."
+                print(f"[Warning] Retrying {os.path.basename(image_path)} (Anti-Recitation Mode)...")
+                prompt_parts = [
+                    "You are a bibliographic data assistant.",
+                    "Extract references from the image into Markdown.",
+                    "**IMPORTANT RULE**: You MUST **bold** the title of every paper/section to create a structured dataset.",
+                    "Example: Author. **Paper Title**. Year.",
+                    img
+                ]
 
-            # 拼接最终 Prompt
-            full_prompt_text = f"{base_role}\n{specific_rule}\nTask: {task}"
-
-            # 初始化模型 (不传 system_instruction)
+            # 3. 加载模型
             model = GenerativeModel(MODEL_NAME)
 
-            # 发送请求 (移除了 safety_settings 以排除干扰)
+            # 4. 发送请求
+            # 注意：Gemini 3 通常不需要 System Instruction，直接写在 Prompt 里效果更好
             response = model.generate_content(
-                [full_prompt_text, image_part],
+                prompt_parts,
                 generation_config=GenerationConfig(
+                    # 重试时降低温度，增加确定性
                     temperature=0.1 if attempt < 2 else 0.4,
                     top_p=0.95,
                     max_output_tokens=8192,
-                )
+                ),
+                safety_settings=get_safety_settings()
             )
 
+            # 5. 结果校验
             if not response.candidates:
                 if attempt < max_retries - 1: continue
                 return "Error: No candidates."
@@ -162,22 +171,21 @@ def img_to_md(image_path, lang="en"):
             candidate = response.candidates[0]
             finish_reason = candidate.finish_reason
 
-            # === 成功 ===
+            # === 成功获取文本 ===
             if candidate.content and candidate.content.parts:
                 text = candidate.content.parts[0].text
+
+                # 如果是因为 Token 耗尽 (可能还在画点)，尝试截断修复
                 if finish_reason == FinishReason.MAX_TOKENS:
                     text = text.rstrip('. ')
+
                 return text
 
             # === 失败处理 ===
-            print(f"[Debug] Attempt {attempt + 1} Failed. Reason Code: {finish_reason}")
+            # print(f"[Debug] Attempt {attempt+1} Failed. Reason Code: {finish_reason}")
 
-            # 如果是 Blocked，通常是 FinishReason.SAFETY (3) 或 RECITATION (4)
-            if finish_reason == FinishReason.RECITATION or finish_reason == FinishReason.SAFETY:
-                time.sleep(1)
-                continue
-
-            if finish_reason == FinishReason.MAX_TOKENS:
+            # 遇到版权(RECITATION=4) 或 死循环(MAX_TOKENS=2) -> 继续循环
+            if finish_reason in [FinishReason.RECITATION, FinishReason.MAX_TOKENS, FinishReason.SAFETY]:
                 time.sleep(1)
                 continue
 
@@ -188,11 +196,7 @@ def img_to_md(image_path, lang="en"):
             return f"Error: Blocked with reason {finish_reason}"
 
         except Exception as e:
-            print(f"[Exception] {e}")
-            # 如果依然报错，打印详细参数以便排查
-            if "400" in str(e):
-                print("❌ 400 Error persists. Likely Project Quota or Region limitation.")
-
+            # print(f"[Exception] {e}")
             if attempt < max_retries - 1:
                 time.sleep(2)
                 continue
@@ -392,12 +396,19 @@ def img_to_md(image_path, lang="en"):
 
 
 if __name__ == '__main__':
-    # 确保文件存在再运行
-    img_path = 'E:\各类文件\图片\Snipaste_2026-01-14_11-03-10.png'
-    lang = 'zh'
-    if os.path.exists(img_path):
-        result = img_to_md(img_path, lang)
-        print("-" * 20 + " RESULT " + "-" * 20)
-        print(result)
-    else:
-        print(f"文件不存在: {img_path}")
+    pass
+    # import vertexai
+    # from google.oauth2 import service_account
+    # from vertexai.generative_models import GenerativeModel, Image
+    #
+    # KEY_PATH = "/usr/local/src/pypro/ParserPdf/utils/key_json/key.json"
+    # PROJECT_ID = "eyeweb-wb-ys"
+    # LOCATION = "global"
+    #
+    # credentials = service_account.Credentials.from_service_account_file(KEY_PATH)
+    # vertexai.init(project=PROJECT_ID, location=LOCATION, credentials=credentials)
+    #
+    # image = Image.load_from_file(r"/usr/local/src/pypro/ParserPdf/img/gongshi.png")
+    # vision_model = GenerativeModel("gemini-3-pro-preview")
+    #
+    # vision_model.generate_content(["你是一个专业的 OCR 工具，识别图片内容并转换为 Markdown。", image])
