@@ -73,7 +73,7 @@ KEY_PATH = "/usr/local/src/pypro/ParserPdf/utils/key_json/key.json"
 PROJECT_ID = "eyeweb-wb-ys"
 LOCATION = "us-central1"
 
-MODEL_NAME = "gemini-1.5-flash-002"
+MODEL_NAME = "gemini-pro"
 
 # ================= 初始化 =================
 try:
