@@ -9,11 +9,88 @@ from utils.ocr_engine import img_to_md
 from utils.file_utils import save_to_json
 import boto3
 from pymysql import Connect
+from concurrent.futures import ThreadPoolExecutor
+
 
 from dotenv import load_dotenv
 
 # 加载环境变量
 load_dotenv()
+
+
+# def process_single_pdf(pdf_path, lang):
+#     if not os.path.exists(pdf_path):
+#         print(f"错误: 文件不存在 -> {pdf_path}")
+#         return
+#
+#     # 1. PDF 转 图片
+#     # 返回：所有图片路径列表，和图片所在的文件夹路径
+#     img_paths, output_dir = convert_pdf_to_images(pdf_path)
+#
+#     # 准备 JSON 数据结构
+#     # pdf_name = os.path.splitext(os.path.basename(pdf_path))[0]
+#     result_data = {
+#         "filename": os.path.basename(pdf_path),
+#         "total_pages": len(img_paths),
+#         "pages": []
+#     }
+#     print(result_data)
+#
+#     print(f"\n🚀 开始 OCR 识别 ({len(img_paths)} 页，语言{lang})...")
+#
+#     # 2. 遍历图片进行 OCR
+#     for idx, img_path in enumerate(img_paths):
+#         page_num = idx + 1
+#         print(f"[{page_num}/{len(img_paths)}] 处理中...")
+#
+#         # 调用 Gemini
+#         md_content = img_to_md(img_path, lang)
+#
+#         # 拼装单页数据
+#         page_data = {
+#             "page": page_num,
+#             "image_path": img_path,
+#             "content": md_content
+#         }
+#         result_data["pages"].append(page_data)
+#
+#     # 3. 保存为 JSON
+#     # JSON 将保存在 output/文件名/文件名.json
+#     save_json_path = str(pdf_path)[:-4].replace('upload', 'result')
+#
+#     json_output_path = os.path.join(save_json_path, f"pdf_new.json")
+#     print(json_output_path)
+#     save_to_json(result_data, json_output_path)
+#
+#     print("\n✨ 全部完成！")
+#     return output_dir, len(img_paths)
+
+
+MAX_WORKERS = 5
+
+
+def process_page_wrapper(args):
+    """
+    包装函数，用于在线程池中运行。
+    接收一个元组参数 (索引, 图片路径, 语言, 总页数)
+    """
+    idx, img_path, lang, total_pages = args
+    page_num = idx + 1
+
+    print(f"⚡ [线程启动] 第 {page_num}/{total_pages} 页开始处理...")
+
+    # 调用核心 OCR 函数
+    # 注意：img_to_md 函数内部已经包含了重试机制，这里直接调用即可
+    md_content = img_to_md(img_path, lang)
+
+    print(f"✅ [线程完成] 第 {page_num}/{total_pages} 页处理完毕")
+
+    # 返回结构化的单页数据
+    return {
+        "page": page_num,
+        "image_path": img_path,
+        "content": md_content
+    }
 
 
 def process_single_pdf(pdf_path, lang):
@@ -22,42 +99,47 @@ def process_single_pdf(pdf_path, lang):
         return
 
     # 1. PDF 转 图片
-    # 返回：所有图片路径列表，和图片所在的文件夹路径
-    img_paths, output_dir = convert_pdf_to_images(pdf_path)
+    # (假设 convert_pdf_to_images 已经在你的代码上下文中定义好了)
+    try:
+        img_paths, output_dir = convert_pdf_to_images(pdf_path)
+    except Exception as e:
+        print(f"PDF 转图片失败: {e}")
+        return
 
     # 准备 JSON 数据结构
-    # pdf_name = os.path.splitext(os.path.basename(pdf_path))[0]
     result_data = {
         "filename": os.path.basename(pdf_path),
         "total_pages": len(img_paths),
-        "pages": []
+        "pages": []  # 这里的数据稍后填充
     }
+
     print(result_data)
+    print(f"\n🚀 开始多线程 OCR 识别 ({len(img_paths)} 页，并发数: {MAX_WORKERS})...")
 
-    print(f"\n🚀 开始 OCR 识别 ({len(img_paths)} 页，语言{lang})...")
+    # 2. 准备多线程任务参数
+    # 将需要的参数打包成元组列表
+    tasks = [(idx, img_path, lang, len(img_paths)) for idx, img_path in enumerate(img_paths)]
 
-    # 2. 遍历图片进行 OCR
-    for idx, img_path in enumerate(img_paths):
-        page_num = idx + 1
-        print(f"[{page_num}/{len(img_paths)}] 处理中...")
+    # 3. 执行多线程池
+    # 使用 map 方法可以保证返回的结果顺序与 tasks 的顺序一致（即按页码排序）
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        # executor.map 会阻塞主线程，直到所有任务完成，并返回一个迭代器
+        results = list(executor.map(process_page_wrapper, tasks))
 
-        # 调用 Gemini
-        md_content = img_to_md(img_path, lang)
+    # 将有序的结果赋值给 result_data
+    result_data["pages"] = results
 
-        # 拼装单页数据
-        page_data = {
-            "page": page_num,
-            "image_path": img_path,
-            "content": md_content
-        }
-        result_data["pages"].append(page_data)
-
-    # 3. 保存为 JSON
-    # JSON 将保存在 output/文件名/文件名.json
+    # 4. 保存为 JSON
     save_json_path = str(pdf_path)[:-4].replace('upload', 'result')
 
+    # 确保目录存在
+    if not os.path.exists(save_json_path):
+        os.makedirs(save_json_path)
+
     json_output_path = os.path.join(save_json_path, f"pdf_new.json")
-    print(json_output_path)
+    print(f"\n💾 保存结果到: {json_output_path}")
+
+    # (假设 save_to_json 已经在你的代码上下文中定义好了)
     save_to_json(result_data, json_output_path)
 
     print("\n✨ 全部完成！")
