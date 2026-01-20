@@ -68,7 +68,8 @@ KEY_PATH = "/usr/local/src/pypro/ParserPdf/utils/key_json/key.json"
 PROJECT_ID = "eyeweb-wb-ys"
 
 # 【关键修改】Gemini 3 Preview 通常需要 global 区域
-LOCATION = "global"
+# LOCATION = "global"
+LOCATION = "us-central1"
 
 # 使用你验证成功的模型
 MODEL_NAME = "gemini-3-pro-preview"
@@ -124,6 +125,7 @@ def img_to_md(image_path, lang="en"):
                 f"你是一个专业的 OCR 工具。请识别图中的{lang}文字并转换为 Markdown。",
                 "如果是数学公式，请严格使用 LaTeX 格式（如 $$...$$）。",
                 "遇到目录页的引导点（......），**必须忽略**，直接输出文字和页码。",
+                "如果图片中没有任何元素，返回""即可",
                 img  # 图片对象直接放入列表
             ]
 
