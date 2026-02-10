@@ -68,8 +68,8 @@ KEY_PATH = "/usr/local/src/pypro/ParserPdf/utils/key_json/key.json"
 PROJECT_ID = "yusuan-20260209-0325"
 
 # 【关键修改】Gemini 3 Preview 通常需要 global 区域
-LOCATION = "global"
-# LOCATION = "us-central1"
+# LOCATION = "global"
+LOCATION = "us-central1"
 
 # 使用你验证成功的模型
 MODEL_NAME = "gemini-3-pro-preview"
