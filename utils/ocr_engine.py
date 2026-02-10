@@ -7,6 +7,8 @@
 # from PIL import Image
 import io
 import random
+import traceback
+
 from dotenv import load_dotenv
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
 import os
@@ -68,8 +70,8 @@ KEY_PATH = "/usr/local/src/pypro/ParserPdf/utils/key_json/key.json"
 PROJECT_ID = "yusuan-20260209-0325"
 
 # 【关键修改】Gemini 3 Preview 通常需要 global 区域
-# LOCATION = "global"
-LOCATION = "us-central1"
+LOCATION = "global"
+# LOCATION = "us-central1"
 
 # 使用你验证成功的模型
 MODEL_NAME = "gemini-3-pro-preview"
@@ -198,7 +200,8 @@ def img_to_md(image_path, lang="en"):
             return f"Error: Blocked with reason {finish_reason}"
 
         except Exception as e:
-            # print(f"[Exception] {e}")
+            print(f"[Exception] {e}")
+            print(traceback.format_exc())
             if attempt < max_retries - 1:
                 time.sleep(2)
                 continue
